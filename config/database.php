@@ -17,6 +17,7 @@ try {
     $pdo = new PDO("mysql:host=" . DB_HOST . ";dbname=" . DB_NAME . ";charset=utf8mb4", DB_USER, DB_PASS);
     $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
     $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+    $pdo->exec("SET time_zone = '+08:00'"); // Fix MySQL NOW() for Hostinger (UTC) servers
 } catch (PDOException $e) {
     die("Connection failed: " . $e->getMessage());
 }
@@ -50,5 +51,5 @@ define('FROM_NAME', 'ServiceLink System');
 // Pagination
 define('ITEMS_PER_PAGE', 10);
 
-// Timezone
+// Timezone — Philippines (UTC+8), fixes both PHP date() and MySQL NOW()
 date_default_timezone_set('Asia/Manila');
