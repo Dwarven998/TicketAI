@@ -8,7 +8,8 @@ $ticket = null;
 $attachments = [];
 $proof_attachments = [];
 $comments = [];
-$reply_success = false;
+// Check URL for the success parameter after redirect
+$reply_success = isset($_GET['replied']) && $_GET['replied'] == '1';
 $reply_error   = '';
 
 if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['client_reply'])) {
@@ -20,7 +21,8 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['client_reply'])) {
         $reply_error = 'Message cannot be empty.';
     } else {
         try {
-            $verifyStmt = $pdo->prepare("SELECT id, client_name FROM tickets WHERE id = ? AND client_email = ? AND is_client = 1");
+            // Added ticket_number to select so we can use it in the redirect URL
+            $verifyStmt = $pdo->prepare("SELECT id, client_name, ticket_number FROM tickets WHERE id = ? AND client_email = ? AND is_client = 1");
             $verifyStmt->execute([$ticket_id_post, $client_email]);
             $verifiedTicket = $verifyStmt->fetch();
 
@@ -37,7 +39,11 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['client_reply'])) {
                     $verifiedTicket['client_name'],
                     $reply_text
                 ]);
-                $reply_success = true;
+
+                // PRG PATTERN FIX: Redirect to stop duplicate submission on refresh
+                $redirect_url = $_SERVER['PHP_SELF'] . "?ticket_id=" . urlencode($verifiedTicket['ticket_number']) . "&email=" . urlencode($client_email) . "&replied=1";
+                header("Location: " . $redirect_url);
+                exit;
             }
         } catch (PDOException $e) {
             $reply_error = 'Error posting reply: ' . $e->getMessage();
@@ -133,13 +139,15 @@ function fetchComments($pdo, $ticket_id)
 }
 
 // ── Main search ───────────────────────────────────────────────────────────────
-if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['ticket_id'])) {
-    $ticket_id = trim($_POST['ticket_id']);
-    $email     = trim($_POST['email']);
+// FIX: Capture parameters from POST or GET (since our redirect uses GET)
+$req_ticket_id = $_POST['ticket_id'] ?? $_GET['ticket_id'] ?? '';
+$req_email     = $_POST['email'] ?? $_GET['email'] ?? '';
 
-    if (empty($ticket_id) || empty($email)) {
-        $error = 'Please fill in both Ticket ID and Email.';
-    } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+if (!empty($req_ticket_id) && !empty($req_email)) {
+    $ticket_id = trim($req_ticket_id);
+    $email     = trim($req_email);
+
+    if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
         $error = 'Please enter a valid email address.';
     } else {
         try {
@@ -177,43 +185,12 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['ticket_id'])) {
             $error = 'Database Error: ' . $e->getMessage();
         }
     }
+} elseif ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['ticket_id'])) {
+    $error = 'Please fill in both Ticket ID and Email.';
 }
 
-// ── Reload after client reply ─────────────────────────────────────────────────
-if ($reply_success && !$ticket) {
-    try {
-        $stmt = $pdo->prepare("
-            SELECT t.*,
-                   d.name    AS department_name,
-                   c.name    AS category_name,
-                   l.name    AS location_name,
-                       tech.first_name AS tech_first_name,
-                       tech.last_name  AS tech_last_name,
-                   cmp.name        AS guest_campus_name
-            FROM tickets t
-            LEFT JOIN departments        d    ON t.department_id = d.id
-            LEFT JOIN service_categories c    ON t.category_id   = c.id
-            LEFT JOIN locations          l    ON t.location_id   = l.id
-            LEFT JOIN users              tech ON t.assigned_to   = tech.id
-                                             AND tech.role NOT IN ('admin', 'superadmin')
-            LEFT JOIN campuses           cmp  ON NULLIF(t.guest_campus, '') = cmp.id
-            WHERE t.id = ?
-              AND t.client_email = ?
-              AND t.is_client = 1
-        ");
-        $stmt->execute([$_POST['ticket_id_hidden'], $_POST['client_email_hidden']]);
-        $ticket = $stmt->fetch();
-
-        if ($ticket) {
-            enrichTicket($pdo, $ticket);
-            $attachments       = fetchAttachments($pdo, $ticket['id']);
-            $proof_attachments = fetchProof($pdo, $ticket['id']);
-            $comments          = fetchComments($pdo, $ticket['id']);
-        }
-    } catch (PDOException $e) {
-        $error = 'Database Error: ' . $e->getMessage();
-    }
-}
+// (The redundant "Reload after client reply" block has been safely deleted, 
+//  as the redirect logic above completely handles it now!)
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -431,15 +408,12 @@ if ($reply_success && !$ticket) {
             flex-direction: column;
             gap: 1.25rem;
             max-height: 450px;
-            /* slightly taller */
             overflow-y: auto;
             padding: 1.5rem;
             background: #f9fafb;
-            /* Subtle background to separate chat from card */
             border-bottom: 1px solid var(--border-color);
         }
 
-        /* Custom scrollbar for chat */
         .chat-container::-webkit-scrollbar {
             width: 6px;
         }
@@ -453,11 +427,9 @@ if ($reply_success && !$ticket) {
             display: flex;
             gap: 0.75rem;
             align-items: flex-end;
-            /* Align avatar to bottom of bubble like modern chats */
             margin-bottom: 0.25rem;
         }
 
-        /* Client aligns right */
         .comment-row.client-row {
             flex-direction: row-reverse;
         }
@@ -482,7 +454,6 @@ if ($reply_success && !$ticket) {
             flex-direction: column;
         }
 
-        /* Client name above bubble */
         .comment-meta-top {
             font-size: 0.7rem;
             color: var(--text-muted);
@@ -507,21 +478,17 @@ if ($reply_success && !$ticket) {
             box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
         }
 
-        /* Staff bubble styling */
         .bubble-staff {
             background: #ffffff;
             border: 1px solid var(--border-color);
             border-bottom-left-radius: 4px;
-            /* classic chat tail */
             color: var(--text-main);
         }
 
-        /* Client bubble styling (Your messages) */
         .bubble-client {
             background: var(--brand-success);
             color: white;
             border-bottom-right-radius: 4px;
-            /* classic chat tail */
         }
 
         .comment-meta-bottom {
@@ -628,12 +595,12 @@ if ($reply_success && !$ticket) {
                             <div class="mb-3">
                                 <label for="ticket_id" class="form-label">Ticket ID / Tracking Code <span class="text-danger">*</span></label>
                                 <input type="text" class="form-control" id="ticket_id" name="ticket_id" required
-                                    value="<?php echo htmlspecialchars($_POST['ticket_id'] ?? ''); ?>" placeholder="e.g., TK2400001">
+                                    value="<?php echo htmlspecialchars($req_ticket_id); ?>" placeholder="e.g., TK2400001">
                             </div>
                             <div class="mb-4">
                                 <label for="email" class="form-label">Email Address <span class="text-danger">*</span></label>
                                 <input type="email" class="form-control" id="email" name="email" required
-                                    value="<?php echo htmlspecialchars($_POST['email'] ?? ''); ?>" placeholder="your@email.com">
+                                    value="<?php echo htmlspecialchars($req_email); ?>" placeholder="your@email.com">
                             </div>
 
                             <button type="submit" class="btn btn-track w-100 mb-4">
